@@ -1,0 +1,13 @@
+web-defterim-chrome-extension/
+├── icons/                # Eklenti ikonları burada olacak
+│   ├── icon16.png
+│   ├── icon48.png
+│   └── icon128.png
+├── js/                   # JavaScript kodlarımız burada olacak
+│   ├── background.js     # Arka plan işlemleri (Service Worker)
+│   └── content_script.js # Web sayfasına enjekte edilecek kod (gerekirse)
+├── css/                  # CSS stilleri (gerekirse)
+├── html/                 # HTML dosyaları (popup, options sayfası vb. için)
+├── manifest.json         # Eklentinin ana yapılandırma dosyası (Bunu şimdi oluşturacağız)
+├── README.md             # Proje açıklaması (Daha önce oluşturduk)
+└── REQUIREMENTS.md       # Proje gereksinimleri (Daha önce oluşturduk)

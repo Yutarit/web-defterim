@@ -1,0 +1,17 @@
+# İşletim sistemi özel dosyaları
+.DS_Store
+Thumbs.db
+
+# Editör/IDE özel dosyaları
+.vscode/
+.idea/
+
+# Bağımlılıklar (Eğer ileride npm kullanırsan)
+node_modules/
+
+# Paket dosyaları (Eklentiyi paketlersen)
+*.crx
+*.zip
+
+# Log dosyaları (Oluşursa)
+*.log

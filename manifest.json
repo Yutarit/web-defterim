@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Web Defterim",
+  "version": "0.1.0",
+  "description": "Web sayfalarından içerik yakalayıp Google Drive'a kaydetme eklentisi.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "js/background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "identity",
+    "storage",
+    "contextMenus",
+    "notifications",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "oauth2": {
+    "client_id": "503921450020-hpn56mddsu8jq2fo4ks43rpfjuug4tjc.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/userinfo.email"
+    ]
+  }
+}
