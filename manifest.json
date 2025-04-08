@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Web Defterim",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Web sayfalarından içerik yakalayıp Google Drive'a kaydetme eklentisi.",
   "icons": {
     "16": "icons/icon16.png",
@@ -13,12 +13,15 @@
     "type": "module"
   },
   "permissions": [
-    "identity",
-    "storage",
     "contextMenus",
+    "identity",       
+    "storage",
     "notifications",
-    "scripting"
+    "scripting",
+    "activeTab",
+    "downloads"
   ],
+  
   "host_permissions": [
     "<all_urls>"
   ],
