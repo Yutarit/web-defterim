@@ -18,8 +18,8 @@
     "storage",
     "notifications",
     "scripting",
-    "activeTab",
-    "downloads"
+    "activeTab"
+   
   ],
   
   "host_permissions": [

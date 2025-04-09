@@ -1,9 +1,13 @@
-// background.js (Sürüm 1.2 - Tek Dosyaya Ekleme ve İndirme - Detaylı Loglama ile)
+// background.js (Sürüm 3.1 - Bildirim Düzeltmesi, Resim Kaydetme, İndirme Kaldırıldı)
 
 // --- Sabitler ---
 const HEDEF_KLASOR_ADI = "Web Defterim";
-const ANA_HTML_DOSYA_ADI = "Web Defterim Notları.html"; // Ana dosyanın adı
+const ANA_HTML_DOSYA_ADI = "Web Defterim Notları.html";
 const TARGET_FILE_ID_KEY = 'webDefterimMainFileId'; // Depolama anahtarı
+
+// --- Yardımcı HTML Kaçış Fonksiyonu ---
+// Güvenlik için URL ve Başlıkları HTML içine yerleştirmeden önce çağırın
+const escapeHTML = (str) => str ? str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') : '';
 
 // --- Chrome API Promise Sarmalayıcıları ---
 function getAuthToken(interactive) {
@@ -49,69 +53,136 @@ function storageLocalSet(items) {
 
 // --- Sağ Tıklama Menüsü ---
 chrome.runtime.onInstalled.addListener(() => {
-    console.log('[Web Defterim] Eklenti yüklendi/güncellendi (v1.2 Log).');
+    console.log('[Web Defterim] Eklenti yüklendi/güncellendi (v3.1).');
     // Önceki menüyü kaldırıp yeniden oluşturmak (hata mesajını yoksay)
     chrome.contextMenus.remove("webDefterimKaydet", () => {
         if (chrome.runtime.lastError) { /* console.log("Kaldırma hatası (önemsiz):", chrome.runtime.lastError.message); */ }
         chrome.contextMenus.create({
             id: "webDefterimKaydet",
-            title: `Seçili İçeriği "${ANA_HTML_DOSYA_ADI}" Dosyasına Ekle`, // Başlık güncellendi
-            contexts: ["selection"]
+            // Başlığı daha genel yapalım
+            title: `Bu İçeriği "${ANA_HTML_DOSYA_ADI}" Dosyasına Ekle`,
+            // Hem metin seçimi hem de resimler için görünür yap
+            contexts: ["selection", "image"] // <<<--- DEĞİŞİKLİK BURADA
         });
-        console.log('[Web Defterim] Sağ tıklama menüsü oluşturuldu/güncellendi.');
+        console.log('[Web Defterim] Sağ tıklama menüsü oluşturuldu/güncellendi (selection + image).');
     });
 });
 
 
-// --- Sağ Tıklama Olayı ---
+// --- Sağ Tıklama Olayı (Güncellendi) ---
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "webDefterimKaydet") {
-        const sayfaUrl = tab.url;
-        const sayfaBasligi = tab.title;
+        // Sayfa URL'sini info nesnesinden almak daha güvenilir olabilir
+        const sayfaUrl = info.pageUrl || (tab ? tab.url : ''); // info.pageUrl yoksa tab.url kullan
+        const sayfaBasligi = tab ? tab.title : 'Başlık Yok'; // tab olmayabilir (örn: resim sekmede açıldıysa)
+        let contentToSave = null; // Kaydedilecek HTML içeriği
+        let contentType = ''; // İçerik türünü belirlemek için (loglama/hata mesajı için)
 
         console.log("--- Web Defterim'e Ekleme İsteği ---");
-        console.log("Sayfa URL'si:", sayfaUrl);
+        console.log("Tıklama Bilgisi (info):", info); // Tüm info objesini logla
+        console.log("Sekme Bilgisi (tab):", tab);
+        console.log("Sayfa URL:", sayfaUrl);
         console.log("Sayfa Başlığı:", sayfaBasligi);
-        console.log("Sekme ID:", tab.id);
         console.log("------------------------------------");
 
-        if (!tab || !tab.id) {
-            bildirimGoster("Hata", "Aktif sekme bilgisi alınamadı.");
-            return;
-        }
-
         try {
-            console.log("[Web Defterim] Seçili HTML alınıyor...");
-            const seciliHTML = await getSelectedHtml(tab.id); // DETAYLI LOGLAMA OLAN FONKSİYON ÇAĞRILIYOR
+            // 1. Durum: Resme tıklandıysa
+            if (info.mediaType === "image" && info.srcUrl) {
+                contentType = 'image';
+                console.log("[Web Defterim] Resim içeriği algılandı. URL:", info.srcUrl);
+                // Resmi basit bir HTML yapısı içinde formatla
+                const escapedSrcUrl = escapeHTML(info.srcUrl);
+                // Resmin başlığını almaya çalış (alt text veya dosya adı olabilir)
+                // Doğrudan info objesinde yok, getSelectedHtml gibi bir inject gerekebilir, şimdilik basit tutalım.
+                const imageTitleGuess = info.srcUrl.substring(info.srcUrl.lastIndexOf('/') + 1) || "Kaydedilen Resim";
 
-            // seciliHTML'in hem null hem de undefined olup olmadığını kontrol et, sonra trim'i dene
-            if (seciliHTML == null || seciliHTML.trim() === "") { // DÜZELTİLMİŞ KONTROL
-                console.warn("[Web Defterim] Seçili içerik null, undefined veya boş."); // Bu mesajı gördüyseniz, getSelectedHtml null/undefined/"" döndürmüştür
-                bildirimGoster("Uyarı", "Kaydedilecek seçili bir içerik bulunamadı veya içerik boş.");
-                return; // Fonksiyon burada durur
+                contentToSave = `<div class="image-entry" style="text-align: center; margin-bottom: 1em; padding: 10px; background-color:#f0f0f0; border-radius: 4px;">
+                                   <p><strong>${escapeHTML(imageTitleGuess)}</strong></p>
+                                   <a href="${escapedSrcUrl}" target="_blank" rel="noopener noreferrer">
+                                     <img src="${escapedSrcUrl}" alt="${escapeHTML(imageTitleGuess)}" style="max-width:95%; height:auto; border:1px solid #ccc; margin-top: 5px; background-color: #fff;">
+                                   </a>
+                                   <p style="font-size: 0.8em; margin-top: 5px;"><a href="${escapedSrcUrl}" target="_blank" rel="noopener noreferrer">Resim Kaynağı</a></p>
+                                 </div>`;
+
+            // 2. Durum: Metin seçildiyse (info.selectionText kontrolü daha güvenli olabilir)
+            // info.linkUrl kontrolü ekleyerek link üzerine sağ tıklamayı da hariç tutalım (eğer sadece seçimi istiyorsak)
+            } else if (info.selectionText && !info.linkUrl) {
+                 contentType = 'selection';
+                 // Geçerli sekme ID'si olduğundan emin ol (seçim için gerekli)
+                 if (!tab || !tab.id) {
+                    console.error("[Web Defterim] Seçim içeriği için geçerli sekme ID'si yok.");
+                    bildirimGoster("Hata", "Seçimi almak için geçerli sekme bilgisi bulunamadı.");
+                    return;
+                 }
+                 console.log("[Web Defterim] Seçim içeriği algılandı. HTML alınıyor...");
+                 contentToSave = await getSelectedHtml(tab.id); // Seçili HTML'i al
+
+            // 3. Durum: Linke tıklandıysa (şimdilik basitçe linki kaydedelim)
+            } else if (info.linkUrl && !info.selectionText) { // Sadece linke tıklandıysa, seçim yoksa
+                 contentType = 'link';
+                 console.log("[Web Defterim] Link içeriği algılandı. URL:", info.linkUrl);
+                 const escapedLinkUrl = escapeHTML(info.linkUrl);
+                 // Link metnini almaya çalışalım (tab DOM'una erişmek gerekebilir, şimdilik URL'i kullanalım)
+                 const linkTitleGuess = info.linkUrl;
+
+                 contentToSave = `<div class="link-entry" style="margin-bottom: 1em; padding: 10px; background-color:#eef; border: 1px solid #dde; border-radius: 4px;">
+                                    <p><strong>Kaydedilen Bağlantı:</strong></p>
+                                    <a href="${escapedLinkUrl}" target="_blank" rel="noopener noreferrer">${escapedLinkUrl}</a>
+                                  </div>`;
+
+
+            // 4. Diğer Durumlar (Beklenmedik veya desteklenmeyen, örn: video, audio)
+            } else {
+                console.warn("[Web Defterim] Tanımlanamayan veya desteklenmeyen içerik türü:", info);
+                // Eğer selectionText varsa ama linkUrl de varsa (link içeren bir metin seçilmişse)
+                if (info.selectionText && info.linkUrl) {
+                   contentType = 'selection_with_link';
+                    if (!tab || !tab.id) {
+                       console.error("[Web Defterim] Seçim içeriği için geçerli sekme ID'si yok.");
+                       bildirimGoster("Hata", "Seçimi almak için geçerli sekme bilgisi bulunamadı.");
+                       return;
+                    }
+                    console.log("[Web Defterim] Link içeren seçim algılandı. HTML alınıyor...");
+                    contentToSave = await getSelectedHtml(tab.id); // Seçili HTML'i almayı dene
+                } else {
+                   bildirimGoster("Uyarı", "Kaydedilecek içerik türü anlaşılamadı veya desteklenmiyor.");
+                   return;
+                }
             }
-            // Eğer buraya gelindiyse, seciliHTML geçerli bir string içeriyor demektir.
-            console.log("[Web Defterim] Geçerli seçili HTML alındı. Kaydetme işlemine devam ediliyor.");
 
-            await anaKaydetmeIslemi(seciliHTML, sayfaUrl, sayfaBasligi);
+            // Alınan içeriğin geçerliliğini kontrol et (null, undefined, boş string)
+            if (contentToSave == null || (typeof contentToSave === 'string' && contentToSave.trim() === "")) {
+                console.warn(`[Web Defterim] ${contentType} için içerik alınamadı veya boş.`);
+                let uyariMesaji = "Kaydedilecek içerik bulunamadı veya boş.";
+                if (contentType === 'image') uyariMesaji = "Resim URL'si işlenemedi veya boş.";
+                else if (contentType === 'selection' || contentType === 'selection_with_link') uyariMesaji = "Kaydedilecek seçili bir metin bulunamadı veya alınamadı.";
+                else if (contentType === 'link') uyariMesaji = "Bağlantı URL'si alınamadı.";
+                bildirimGoster("Uyarı", uyariMesaji);
+                return;
+            }
+
+            // İçerik başarıyla alındı/oluşturuldu, kaydetme işlemine geç
+            console.log(`[Web Defterim] ${contentType} içeriği başarıyla alındı/formatlandı. Kaydediliyor...`);
+            // Ana kaydetme fonksiyonunu çağırırken, sayfa başlığını değil, içeriğe özel bir başlık kullanabiliriz
+            // Şimdilik sayfa başlığını kullanmaya devam edelim.
+            await anaKaydetmeIslemi(contentToSave, sayfaUrl, sayfaBasligi);
 
         } catch (error) {
-            console.error("[Web Defterim] Ana işlem sırasında hata:", error);
+            // Hata yakalama (getSelectedHtml veya anaKaydetmeIslemi'nden gelebilir)
+            console.error("[Web Defterim] İşlem sırasında genel hata:", error);
             let hataMesaji = `Bir hata oluştu: ${error.message || 'Bilinmeyen Hata'}`;
-             if (error.message && error.message.includes("Dosya bulunamadı (404)")) {
-                 hataMesaji = `Ana "${ANA_HTML_DOSYA_ADI}" dosyası Drive'da bulunamadı. Yerel depolama temizleniyor, tekrar deneyin.`;
-                 await storageLocalSet({ [TARGET_FILE_ID_KEY]: null }).catch(e => console.error("Dosya ID temizlenirken hata:", e));
-             } else if (error.message && error.message.includes("OAuth jetonu alınamadı")) {
-                hataMesaji = "Google hesabınıza erişim izni alınamadı/yenilenemedi. Tekrar deneyin.";
-             } else if (error.message && error.message.includes("Failed to fetch")) {
-                hataMesaji = "Ağ hatası. İnternet bağlantınızı veya Google Drive durumunu kontrol edin.";
-             } else if (error.message && error.message.includes("Sayfa içeriğine erişirken hata")) {
+            if (error.message && error.message.includes("Sayfa içeriğine erişirken hata")) {
                 hataMesaji = "Sayfadan içerik alınamadı. Bu sayfa korumalı veya özel olabilir.";
-             }
+            } else if (error.message && error.message.includes("OAuth")) {
+                hataMesaji = "Google kimlik doğrulaması başarısız oldu. Tekrar deneyin.";
+            } else if (error.message && error.message.includes("API Hatası")) {
+                 hataMesaji = `Google Drive işlemi başarısız oldu: ${error.message}`;
+            }
             bildirimGoster("Hata", hataMesaji);
         }
     }
 });
+
 
 // --- Seçili Alanın HTML'ini Alma Fonksiyonu (Detaylı Loglama ile) ---
 async function getSelectedHtml(tabId) {
@@ -119,28 +190,27 @@ async function getSelectedHtml(tabId) {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tabId },
-      // world: 'MAIN', // Bazen MAIN world'de çalışmak gerekebilir, ama genellikle ISOLATED yeterlidir.
+      // world: 'MAIN', // Nadiren gerekebilir
       func: () => {
         // --- Bu kısım sayfa içinde çalışır (Content Script gibi) ---
         console.log('[Injected Script] Çalışıyor...');
         const selection = window.getSelection();
-        // Seçim nesnesini ve içeriğini logla (içerik çok uzun olabilir dikkat)
         console.log('[Injected Script] Selection nesnesi:', selection);
         console.log('[Injected Script] Selection toString():', selection ? selection.toString().substring(0, 200) : 'N/A');
 
-        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) { // isCollapsed ekledik (nokta seçimi kontrolü)
+        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
           console.log('[Injected Script] Seçim yok, rangeCount 0 veya isCollapsed true.');
-          return null; // Seçim yoksa null dön
+          return null;
         }
         console.log(`[Injected Script] rangeCount: ${selection.rangeCount}, isCollapsed: ${selection.isCollapsed}`);
 
-        try { // İçerideki işlemleri de try-catch'e alalım
+        try {
             const range = selection.getRangeAt(0);
             console.log('[Injected Script] Range alındı:', range);
-            const clonedSelection = range.cloneContents(); // DocumentFragment döndürür
+            const clonedSelection = range.cloneContents();
             console.log('[Injected Script] İçerik klonlandı (DocumentFragment):', clonedSelection);
             const container = document.createElement('div');
-            container.appendChild(clonedSelection); // Fragment'ı div'e ekle
+            container.appendChild(clonedSelection);
 
             // URL düzeltme işlemleri...
             container.querySelectorAll('img').forEach(img => {
@@ -155,9 +225,8 @@ async function getSelectedHtml(tabId) {
                   a.target = '_blank';
              });
 
-            const finalHTML = container.innerHTML; // Div'in iç HTML'ini al
+            const finalHTML = container.innerHTML;
             console.log('[Injected Script] Dönen HTML (ilk 200 char):', finalHTML ? finalHTML.substring(0, 200) : 'BOŞ');
-            // Dönen HTML boş olabilir mi? Evet, seçilen bazı özel öğelerde (örn: sadece <br>) olabilir.
             if (finalHTML === undefined || finalHTML === null) {
                 console.warn('[Injected Script] container.innerHTML null veya undefined döndü.');
                 return null;
@@ -165,98 +234,93 @@ async function getSelectedHtml(tabId) {
             return finalHTML;
         } catch (innerError) {
              console.error('[Injected Script] İçerik işlenirken HATA:', innerError);
-             return null; // Hata durumunda null dön
+             return null;
         }
         // --- Sayfa içi script sonu ---
       },
     });
 
     // --- executeScript sonrası background script'e dönüldü ---
-    // Dönen sonucu daha dikkatli inceleyelim
-    console.log("[getSelectedHtml] executeScript ham sonuçları:", results); // Ham sonucu logla
+    console.log("[getSelectedHtml] executeScript ham sonuçları:", results);
 
-    // results bir dizi olmalı.
     if (!Array.isArray(results) || results.length === 0) {
         console.warn("[getSelectedHtml] executeScript beklenen dizi sonucunu döndürmedi:", results);
         return null;
     }
 
-    // İlk sonucun (frame 0) result özelliğini alalım
     const firstResult = results[0];
     if (!firstResult || firstResult.result === undefined) {
-         // Hata durumu veya inject edilen script'in undefined döndüğü durum
          console.warn("[getSelectedHtml] executeScript ilk sonucu veya result özelliği tanımsız:", firstResult);
+         // result undefined ise genellikle script içinde bir hata olmuştur (console'da görünür)
          return null;
     }
 
-    // Sonuç null olabilir (inject edilen script null döndürdüyse)
     if (firstResult.result === null) {
         console.log("[getSelectedHtml] executeScript sonucu explicit olarak null.");
         return null;
     }
 
-    // Sonuç bir string olmalı
     if (typeof firstResult.result !== 'string') {
          console.warn("[getSelectedHtml] executeScript sonucu beklenen string türünde değil:", typeof firstResult.result, firstResult.result);
-         return null; // Beklenmedik tür, null dönelim
+         return null;
     }
 
-    // Buraya geldiyse, geçerli bir string sonuç var demektir
     console.log("[getSelectedHtml] Geçerli string sonuç bulundu, döndürülüyor.");
-    return firstResult.result; // String HTML'i döndür
+    return firstResult.result;
 
   } catch (error) {
-    // executeScript çağrısında bir hata oluştu (izinler, geçersiz tabId vb.)
     console.error("[getSelectedHtml] executeScript çağrılırken HATA:", error);
-    // Hatanın yukarıya iletilmesi önemli
+    // Chrome'un iç sayfalarında (örn: chrome://extensions) çalışmaz.
+    if (error.message.includes("Cannot access contents of url")) {
+        throw new Error("Sayfa içeriğine erişilemiyor (korumalı sayfa olabilir).");
+    } else if (error.message.includes("No tab with id")) {
+         throw new Error("Geçersiz sekme ID'si.");
+    }
+    // Diğer hatalar için genel mesaj
     throw new Error(`Sayfa içeriğine erişirken hata: ${error.message}`);
   }
 }
 
 
-// --- Ana Kaydetme İşlemi (Güncellendi) ---
+// --- Ana Kaydetme İşlemi ---
 async function anaKaydetmeIslemi(htmlIcerik, url, baslik) {
-    console.log("[Web Defterim] OAuth jetonu isteniyor...");
-    const token = await getAuthToken(true);
-    console.log("[Web Defterim] OAuth jetonu alındı.");
+    console.log("[anaKaydetmeIslemi] Başlatıldı.");
+    try {
+        console.log("[Web Defterim] OAuth jetonu isteniyor...");
+        const token = await getAuthToken(true);
+        console.log("[Web Defterim] OAuth jetonu alındı.");
 
-    console.log(`[Web Defterim] "${HEDEF_KLASOR_ADI}" klasör ID'si alınıyor...`);
-    const klasorId = await getWebDefterimFolderId(token); // Klasör hala lazım
-    console.log(`[Web Defterim] Klasör ID'si alındı: ${klasorId}`);
+        console.log(`[Web Defterim] "${HEDEF_KLASOR_ADI}" klasör ID'si alınıyor...`);
+        const klasorId = await getWebDefterimFolderId(token);
+        console.log(`[Web Defterim] Klasör ID'si alındı: ${klasorId}`);
 
-    console.log(`[Web Defterim] Ana HTML dosyası (${ANA_HTML_DOSYA_ADI}) ID'si alınıyor/kontrol ediliyor...`);
-    let targetFileId = await getMainHtmlFileId(token); // Dosya ID'sini al/kontrol et
+        console.log(`[Web Defterim] Ana HTML dosyası (${ANA_HTML_DOSYA_ADI}) ID'si alınıyor/kontrol ediliyor...`);
+        let targetFileId = await getMainHtmlFileId(token);
 
-    let updatedHtmlContent; // Güncellenmiş içeriği tutacak değişken
+        if (targetFileId) {
+            console.log(`[Web Defterim] Mevcut dosya ID'si (${targetFileId}) bulundu. İçerik eklenecek.`);
+            await appendContentToDriveFile(token, targetFileId, htmlIcerik, url, baslik);
+            bildirimGoster("Başarılı", `İçerik "${ANA_HTML_DOSYA_ADI}" dosyasına eklendi.`);
 
-    if (targetFileId) {
-        console.log(`[Web Defterim] Mevcut dosya ID'si (${targetFileId}) bulundu. İçerik eklenecek.`);
-        try {
-            updatedHtmlContent = await appendContentToDriveFile(token, targetFileId, htmlIcerik, url, baslik);
-            bildirimGoster("Başarılı", `Not "${ANA_HTML_DOSYA_ADI}" dosyasına eklendi.`);
-        } catch (appendError) {
-             console.error("[Web Defterim] Dosyaya ekleme sırasında hata:", appendError);
-             if (appendError.message && appendError.message.includes("404")) {
-                  console.warn("[Web Defterim] Eklenmeye çalışılan dosya bulunamadı. ID temizleniyor.");
-                  await storageLocalSet({ [TARGET_FILE_ID_KEY]: null }).catch(e => console.error("Dosya ID temizlenirken hata:", e));;
-                  throw new Error(`Ana dosya (${targetFileId}) Drive'da bulunamadı (404). Lütfen tekrar deneyin, dosya yeniden oluşturulacak.`);
-             }
-             throw appendError;
+        } else {
+            console.log(`[Web Defterim] Ana dosya ID'si bulunamadı veya geçersiz. Yeni dosya oluşturulacak: ${ANA_HTML_DOSYA_ADI}`);
+            targetFileId = await createMainHtmlFile(token, klasorId, htmlIcerik, url, baslik);
+            console.log(`[Web Defterim] Ana dosya oluşturuldu: ${targetFileId}`);
+            await storageLocalSet({ [TARGET_FILE_ID_KEY]: targetFileId });
+            console.log("[Web Defterim] Yeni dosya ID'si yerel depolamaya kaydedildi.");
+            bildirimGoster("Başarılı", `"${ANA_HTML_DOSYA_ADI}" dosyası oluşturuldu ve ilk içerik eklendi.`);
         }
+        console.log("[anaKaydetmeIslemi] Başarıyla tamamlandı.");
 
-    } else {
-        console.log(`[Web Defterim] Ana dosya ID'si bulunamadı veya geçersiz. Yeni dosya oluşturulacak: ${ANA_HTML_DOSYA_ADI}`);
-        targetFileId = await createMainHtmlFile(token, klasorId, htmlIcerik, url, baslik);
-        updatedHtmlContent = await getDriveFileContent(token, targetFileId); // Oluşturulan içeriği al
-        console.log(`[Web Defterim] Ana dosya oluşturuldu: ${targetFileId}`);
-        await storageLocalSet({ [TARGET_FILE_ID_KEY]: targetFileId });
-        console.log("[Web Defterim] Yeni dosya ID'si yerel depolamaya kaydedildi.");
-        bildirimGoster("Başarılı", `"${ANA_HTML_DOSYA_ADI}" dosyası oluşturuldu ve ilk not eklendi.`);
-    }
-
-    if (updatedHtmlContent) {
-        console.log("[Web Defterim] Yerel indirme tetikleniyor...");
-        triggerLocalDownload(updatedHtmlContent, ANA_HTML_DOSYA_ADI);
+    } catch (error) {
+        // Bu catch bloğu getAuthToken, getWebDefterimFolderId, getMainHtmlFileId,
+        // appendContentToDriveFile veya createMainHtmlFile fonksiyonlarından gelen hataları yakalar.
+        console.error("[anaKaydetmeIslemi] Hata yakalandı:", error);
+        // Hata mesajını yukarıdaki genel catch bloğuna tekrar fırlatalım ki bildirim gösterilsin.
+        // Eğer burada spesifik bir işlem yapmak istemiyorsanız, bu catch bloğu kaldırılabilir,
+        // çünkü ana onClicked listener'ında zaten bir catch var.
+        // Ama loglama için kalabilir.
+        throw error; // Hatanın yukarı iletilmesi önemli
     }
 }
 
@@ -273,7 +337,7 @@ async function getMainHtmlFileId(token) {
                 return fileId;
             } else {
                 console.warn("[getMainHtmlFileId] Yerel depodaki dosya ID'si artık geçerli değil. ID temizleniyor.");
-                await storageLocalSet({ [TARGET_FILE_ID_KEY]: null }).catch(e => console.error("Dosya ID temizlenirken hata:", e));;
+                await storageLocalSet({ [TARGET_FILE_ID_KEY]: null }).catch(e => console.error("Dosya ID temizlenirken hata:", e));
                 return null;
             }
         }
@@ -288,27 +352,35 @@ async function getMainHtmlFileId(token) {
 // --- Drive Dosyasının/Klasörünün Varolup Olmadığını Kontrol Etme ---
 async function checkFileExists(token, fileOrFolderId) {
     if (!fileOrFolderId) return false;
-    const apiUrl = `https://www.googleapis.com/drive/v3/files/${fileOrFolderId}?fields=id,trashed`;
+    const apiUrl = `https://www.googleapis.com/drive/v3/files/${fileOrFolderId}?fields=id,trashed,mimeType`; // mimeType ekleyelim
     console.log(`[checkFileExists] ID ${fileOrFolderId} kontrol ediliyor...`);
     try {
         const response = await fetch(apiUrl, {
-            method: 'GET', // GET açıkça belirtmek iyi olabilir
+            method: 'GET',
             headers: { 'Authorization': `Bearer ${token}` }
         });
         console.log(`[checkFileExists] ID ${fileOrFolderId} için yanıt durumu: ${response.status}`);
         if (response.status === 404) {
             return false;
         }
+        // Yetkilendirme hatası (401) veya İzin hatası (403)
+        if (response.status === 401 || response.status === 403) {
+             console.warn(`[checkFileExists] ID (${fileOrFolderId}) kontrolü sırasında ${response.status} hatası. Token veya izin sorunu olabilir. Geçersiz varsayılıyor.`);
+             // Bu durumda ID'yi geçersiz saymak daha doğru olabilir.
+             return false;
+        }
         if (!response.ok) {
+             // Diğer sunucu hataları (5xx)
              console.warn(`[checkFileExists] ID (${fileOrFolderId}) kontrolü sırasında API hatası (${response.status}): ${response.statusText}. Geçerli varsayılıyor.`);
-             return true;
+             return true; // Geçici hata olabilir, var kabul edelim
         }
         const data = await response.json();
         if (data.trashed) {
              console.log(`[checkFileExists] ID (${fileOrFolderId}) çöp kutusunda.`);
              return false;
         }
-        console.log(`[checkFileExists] ID (${fileOrFolderId}) geçerli.`);
+        // İsteğe bağlı: Mime tipini de kontrol edebiliriz (örn: klasör ID'si mi dosya ID'si mi bekliyoruz)
+        console.log(`[checkFileExists] ID (${fileOrFolderId}) geçerli (MimeType: ${data.mimeType}).`);
         return true;
     } catch (error) {
         console.error(`[checkFileExists] ID (${fileOrFolderId}) varlığı kontrol edilirken ağ hatası:`, error);
@@ -316,7 +388,7 @@ async function checkFileExists(token, fileOrFolderId) {
     }
 }
 
-// --- Klasör ID Alma/Oluşturma ---
+// --- Klasör ID Alma/Oluşturma Fonksiyonları ---
 async function getWebDefterimFolderId(token) {
   let folderId = null;
   // 1. Yerel depolamayı kontrol et
@@ -330,7 +402,7 @@ async function getWebDefterimFolderId(token) {
            return data.webDefterimFolderId;
       } else {
           console.warn("[getWebDefterimFolderId] Yerel depolamadaki Klasör ID artık geçerli değil. Tekrar aranacak.");
-          await storageLocalSet({ webDefterimFolderId: null }).catch(e => console.error("Klasör ID temizlenirken hata:", e));;
+          await storageLocalSet({ webDefterimFolderId: null }).catch(e => console.error("Klasör ID temizlenirken hata:", e));
       }
     }
   } catch (error) {
@@ -351,7 +423,8 @@ async function getWebDefterimFolderId(token) {
         console.log(`[getWebDefterimFolderId] Klasör oluşturuldu: ${folderId}`);
     } catch (createError) {
         console.error("[getWebDefterimFolderId] Klasör oluşturma başarısız:", createError);
-        throw new Error(`Hedef klasör oluşturulamadı: ${createError.message}`);
+        // Klasör oluşturma kritik, hata fırlatmalı
+        throw new Error(`Hedef klasör ('${HEDEF_KLASOR_ADI}') oluşturulamadı: ${createError.message}`);
     }
   }
 
@@ -361,11 +434,11 @@ async function getWebDefterimFolderId(token) {
         await storageLocalSet({ webDefterimFolderId: folderId });
         console.log("[getWebDefterimFolderId] Klasör ID'si yerel depolamaya kaydedildi.");
       } catch (error) {
+        // Kaydetme hatası kritik değil, sadece sonraki sefer tekrar arar.
         console.warn("[getWebDefterimFolderId] Yerel depolamaya klasör ID'si kaydedilirken hata:", error);
       }
-  }
-
-  if (!folderId) {
+  } else {
+      // Bu durumun olmaması lazım (ya bulundu ya oluşturuldu)
       throw new Error("Klasör ID'si alınamadı veya oluşturulamadı.");
   }
 
@@ -387,6 +460,11 @@ async function searchForFolder(token, folderName) {
     if (!response.ok) {
         const errorText = await response.text();
         console.error(`[searchForFolder] API yanıtı (${response.status}): ${errorText}`);
+        // Yetkilendirme/izin hatası ise özel mesaj verelim
+        if (response.status === 401 || response.status === 403) {
+             chrome.identity.removeCachedAuthToken({ token: token }, () => {});
+             throw new Error(`Klasör arama izni hatası (${response.status}). Token veya API iznini kontrol edin.`);
+        }
         throw new Error(`Klasör arama API Hatası (${response.status}): ${response.statusText}`);
     }
     const data = await response.json();
@@ -398,17 +476,14 @@ async function searchForFolder(token, folderName) {
            return exactMatch.id;
       }
       console.warn(`[searchForFolder] Tam isim eşleşmesi bulunamadı ('${folderName}'). İlk bulunan kullanılıyor: ID ${data.files[0].id}, İsim '${data.files[0].name}'`);
-      return data.files[0].id;
+      return data.files[0].id; // İlkini döndür
     } else {
       console.log(`[searchForFolder] Klasör bulunamadı.`);
       return null;
     }
   } catch (error) {
-     console.error("[searchForFolder] Klasör arama sırasında hata:", error);
-     if (error.message && (error.message.includes("401") || error.message.includes("OAuth"))) {
-        chrome.identity.removeCachedAuthToken({ token: token }, () => {});
-        throw new Error("Kimlik doğrulama sorunu (Klasör aranırken). Token geçersiz olabilir.");
-     }
+     console.error("[searchForFolder] Klasör arama sırasında kritik hata:", error);
+     // Zaten yukarıda özel mesaj verildi, hatayı tekrar fırlat
      throw error;
   }
 }
@@ -434,17 +509,17 @@ async function createFolder(token, folderName) {
     if (!response.ok) {
        const errorText = await response.text();
        console.error(`[createFolder] API yanıtı (${response.status}): ${errorText}`);
+       if (response.status === 401 || response.status === 403) {
+             chrome.identity.removeCachedAuthToken({ token: token }, () => {});
+             throw new Error(`Klasör oluşturma izni hatası (${response.status}). Token veya API iznini kontrol edin.`);
+       }
        throw new Error(`Klasör oluşturma API Hatası (${response.status}): ${response.statusText}`);
     }
     const data = await response.json();
     console.log(`[createFolder] Klasör oluşturuldu: ${data.id}`);
     return data.id;
   } catch (error) {
-    console.error("[createFolder] Klasör oluşturma sırasında hata:", error);
-    if (error.message && (error.message.includes("401") || error.message.includes("OAuth"))) {
-        chrome.identity.removeCachedAuthToken({ token: token }, () => {});
-        throw new Error("Kimlik doğrulama sorunu (Klasör oluşturulurken). Token geçersiz olabilir.");
-     }
+    console.error("[createFolder] Klasör oluşturma sırasında kritik hata:", error);
     throw error;
   }
 }
@@ -454,46 +529,47 @@ async function createFolder(token, folderName) {
 async function createMainHtmlFile(token, parentFolderId, firstHtmlContent, url, baslik) {
     console.log(`[createMainHtmlFile] Ana dosya "${ANA_HTML_DOSYA_ADI}" oluşturuluyor, parent: ${parentFolderId}`);
     const now = new Date();
-    const initialEntryHtml = formatHtmlEntry(firstHtmlContent, url, baslik, now);
+    const initialEntryHtml = formatHtmlEntry(firstHtmlContent, url, baslik, now); // İlk notu formatla
 
+    // Temel HTML yapısı ve stiller
     const fileContent = `<!DOCTYPE html>
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${ANA_HTML_DOSYA_ADI}</title>
+  <title>${escapeHTML(ANA_HTML_DOSYA_ADI)}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif; line-height: 1.6; margin: 20px; background-color: #f8f9fa; color: #212529; }
     .container { max-width: 900px; margin: 10px auto; }
-    h1 { border-bottom: 2px solid #dee2e6; padding-bottom: 0.5em; margin-bottom: 1em; }
-    .entry { background-color: #fff; border: 1px solid #dee2e6; border-radius: .25rem; padding: 1rem 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 .125rem .25rem rgba(0,0,0,.075); }
+    h1 { border-bottom: 2px solid #dee2e6; padding-bottom: 0.5em; margin-bottom: 1em; color: #343a40; }
+    .entry { background-color: #fff; border: 1px solid #dee2e6; border-radius: .25rem; padding: 1rem 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 .125rem .25rem rgba(0,0,0,.075); overflow: hidden; /* İçerik taşmasını önle */ }
     .entry-meta { font-size: 0.875em; color: #6c757d; border-bottom: 1px solid #eee; padding-bottom: 0.75rem; margin-bottom: 0.75rem; }
-    .entry-meta p { margin: 0.25rem 0; }
+    .entry-meta p { margin: 0.25rem 0; word-break: break-all; /* Uzun URL'ler için */ }
     .entry-meta strong { color: #495057; }
     .entry-meta a { color: #007bff; text-decoration: none; }
     .entry-meta a:hover { text-decoration: underline; }
     .entry-content { margin-top: 1rem; word-wrap: break-word; }
-    .entry-content img, .entry-content video, .entry-content iframe { max-width: 100%; height: auto; border-radius: .25rem; margin-bottom: .5rem; background-color: #eee; }
+    .entry-content img, .entry-content video, .entry-content iframe { max-width: 100%; height: auto; border-radius: .25rem; margin-bottom: .5rem; background-color: #eee; display: block; /* Ekstra boşlukları kaldırabilir */ }
     .entry-content table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; border: 1px solid #ccc; }
     .entry-content th, .entry-content td { border: 1px solid #ccc; padding: .5rem .75rem; text-align: left; }
     .entry-content th { background-color: #e9ecef; font-weight: 600; }
     .entry-content pre { background-color: #f1f1f1; padding: 1em; border-radius: .25rem; overflow-x: auto; font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.9em;}
     .entry-content blockquote { border-left: .25em solid #eee; padding-left: 1em; margin-left: 0; font-style: italic; color: #555;}
     hr.entry-separator { border: 0; height: 1px; background-color: #ced4da; margin: 2rem 0; }
-    .footer-note { text-align: center; font-size: 0.8em; color: #aaa; margin-top: 2rem; }
+    .footer-note { text-align: center; font-size: 0.8em; color: #aaa; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; }
   </style>
 </head>
 <body>
 <div class="container">
-  <h1>${ANA_HTML_DOSYA_ADI}</h1>
-  <p>Bu dosya, Web Defterim Chrome uzantısı ile kaydedilen notları içerir.</p>
-  <hr class="entry-separator">
+  <h1>${escapeHTML(ANA_HTML_DOSYA_ADI)}</h1>
+  <p>Bu dosya, Web Defterim Chrome uzantısı ile kaydedilen içerikleri içerir.</p>
 
   ${initialEntryHtml}
 
+  <hr class="entry-separator">
   <!-- NOT_EKLEME_NOKTASI -->
 </div>
-<p class="footer-note">Son güncelleme: ${new Date().toISOString()}</p>
+<p class="footer-note">Dosya Oluşturulma: ${now.toISOString()}</p>
 </body>
 </html>`;
 
@@ -502,7 +578,7 @@ async function createMainHtmlFile(token, parentFolderId, firstHtmlContent, url, 
         name: ANA_HTML_DOSYA_ADI,
         mimeType: 'text/html',
         parents: [parentFolderId],
-        description: `Web Defterim uzantısı tarafından oluşturulan notlar. Son not eklenme: ${now.toISOString()}`
+        description: `Web Defterim uzantısı tarafından oluşturulan notlar. Oluşturulma: ${now.toISOString()}`
     };
 
     const metadataBlob = new Blob([JSON.stringify(metadata)], { type: 'application/json; charset=UTF-8' });
@@ -510,7 +586,7 @@ async function createMainHtmlFile(token, parentFolderId, firstHtmlContent, url, 
 
     const requestBody = new FormData();
     requestBody.append('metadata', metadataBlob);
-    requestBody.append('file', contentBlob, ANA_HTML_DOSYA_ADI); // Dosya adını FormData'ya eklemek bazen işe yarar
+    requestBody.append('file', contentBlob, ANA_HTML_DOSYA_ADI);
 
     try {
         const response = await fetch(apiUrl, {
@@ -523,7 +599,10 @@ async function createMainHtmlFile(token, parentFolderId, firstHtmlContent, url, 
             let errorData = {}; try { errorData = await response.json(); } catch(e) { errorData.message = await response.text(); }
             const errorMessage = `Ana dosya oluşturma API Hatası (${response.status}): ${response.statusText} - ${JSON.stringify(errorData)}`;
             console.error("[createMainHtmlFile]", errorMessage);
-            if (response.status === 401) { chrome.identity.removeCachedAuthToken({ token: token }, () => {}); throw new Error("Kimlik doğrulama sorunu (Dosya Oluşturma)."); }
+            if (response.status === 401 || response.status === 403) {
+                 chrome.identity.removeCachedAuthToken({ token: token }, () => {});
+                 throw new Error(`Ana dosya oluşturma izni hatası (${response.status}).`);
+            }
             throw new Error(`Google Drive API hatası (${response.status}): ${errorData.message || response.statusText}`);
         }
 
@@ -533,7 +612,7 @@ async function createMainHtmlFile(token, parentFolderId, firstHtmlContent, url, 
 
     } catch (error) {
         console.error("[createMainHtmlFile] Ana HTML dosyası oluşturma sırasında kritik hata:", error);
-        throw error;
+        throw error; // Hatanın yukarıya iletilmesi
     }
 }
 
@@ -542,47 +621,50 @@ async function appendContentToDriveFile(token, fileId, newHtmlContent, url, basl
     console.log(`[appendContentToDriveFile] Dosya (${fileId}) içeriği alınıyor...`);
     const currentContent = await getDriveFileContent(token, fileId);
 
-    console.log("[appendContentToDriveFile] Yeni not formatlanıyor...");
+    console.log("[appendContentToDriveFile] Yeni içerik formatlanıyor...");
     const now = new Date();
     const newEntryHtml = formatHtmlEntry(newHtmlContent, url, baslik, now);
 
-    // Yeni içeriği ekle (<!-- NOT_EKLEME_NOKTASI --> yorumundan önce)
-    // Bu, </body>'den daha güvenilir olabilir.
+    // Yeni içeriği ekle (<!-- NOT_EKLEME_NOKTASI --> yorumundan HEMEN ÖNCE)
     const insertionMarker = '<!-- NOT_EKLEME_NOKTASI -->';
     const insertionPoint = currentContent.indexOf(insertionMarker);
     let updatedContent;
 
     if (insertionPoint !== -1) {
+        // Yeni içeriği ve ayıracı marker'dan önce ekle
         updatedContent = currentContent.slice(0, insertionPoint)
                        + newEntryHtml + '\n'
                        + '<hr class="entry-separator">\n' // Yeni nottan SONRA ayraç
-                       + currentContent.slice(insertionPoint);
+                       + currentContent.slice(insertionPoint); // Marker ve sonrası
         console.log(`[appendContentToDriveFile] İçerik "${insertionMarker}" öncesine eklendi.`);
     } else {
-        // Eğer marker bulunamazsa (eski dosya formatı?), </body>'den önce eklemeyi dene
+        // Eğer marker bulunamazsa, </body>'den önce eklemeyi dene
         const fallbackMarker = '</body>';
         const fallbackPoint = currentContent.lastIndexOf(fallbackMarker);
         if (fallbackPoint !== -1) {
             console.warn(`[appendContentToDriveFile] "${insertionMarker}" bulunamadı! </body> öncesine ekleniyor.`);
             updatedContent = currentContent.slice(0, fallbackPoint)
-                           + '<hr class="entry-separator">\n'
                            + newEntryHtml + '\n'
+                           + '<hr class="entry-separator">\n'
                            + currentContent.slice(fallbackPoint);
         } else {
-            // body de bulunamazsa, sona ekle
              console.error(`[appendContentToDriveFile] Ne "${insertionMarker}" ne de "${fallbackMarker}" bulunamadı! İçerik sona ekleniyor.`);
+             // Sona eklerken ayraç eklemek mantıklı olabilir
              updatedContent = currentContent + '\n<hr class="entry-separator">\n' + newEntryHtml;
         }
     }
 
     // Footer'daki tarihi güncelle (varsa)
-    const footerMarker = '<p class="footer-note">Son güncelleme: ';
+    const footerMarker = '<p class="footer-note">'; // Başlangıcı ara
     const footerStart = updatedContent.lastIndexOf(footerMarker);
     if (footerStart !== -1) {
         const footerEnd = updatedContent.indexOf('</p>', footerStart);
         if (footerEnd !== -1) {
+             // Mevcut footer içeriğini al ve tarihi güncelle
+             // Örneğin: "Dosya Oluşturulma: ... | Son Güncelleme: ..."
+             const newFooterText = `Son Güncelleme: ${now.toISOString()}`;
              updatedContent = updatedContent.slice(0, footerStart + footerMarker.length) +
-                              now.toISOString() +
+                              newFooterText + // Veya mevcut içeriği koruyup ekleyebilirsiniz
                               updatedContent.slice(footerEnd);
              console.log("[appendContentToDriveFile] Footer tarihi güncellendi.");
         }
@@ -590,9 +672,6 @@ async function appendContentToDriveFile(token, fileId, newHtmlContent, url, basl
 
 
     console.log(`[appendContentToDriveFile] Dosya (${fileId}) içeriği güncelleniyor...`);
-    // Güncelleme için v3 update metadata + media aynı anda desteklemiyor gibi.
-    // Önce metadata (description) güncelle, sonra media yükle. VEYA sadece media yükle.
-    // Sadece media yüklemek daha basit ve genellikle yeterli.
     const updateMediaUrl = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`;
     const contentBlob = new Blob([updatedContent], { type: 'text/html; charset=UTF-8' });
 
@@ -610,31 +689,21 @@ async function appendContentToDriveFile(token, fileId, newHtmlContent, url, basl
              let errorData = {}; try { errorData = await response.json(); } catch(e) { errorData.message = await response.text(); }
              const errorMessage = `Dosya güncelleme API Hatası (${response.status}): ${response.statusText} - ${JSON.stringify(errorData)}`;
              console.error("[appendContentToDriveFile]", errorMessage);
-             if (response.status === 401) { chrome.identity.removeCachedAuthToken({ token: token }, () => {}); throw new Error("Kimlik doğrulama sorunu (Dosya Güncelleme)."); }
-             if (response.status === 404) { throw new Error(`Dosya bulunamadı (404) - ID: ${fileId}`); }
+             if (response.status === 401 || response.status === 403) {
+                  chrome.identity.removeCachedAuthToken({ token: token }, () => {});
+                  throw new Error(`Dosya güncelleme izni hatası (${response.status}).`);
+             }
+             if (response.status === 404) { throw new Error(`Güncellenecek dosya bulunamadı (404) - ID: ${fileId}`); }
              throw new Error(`Google Drive API hatası (${response.status}): ${errorData.message || response.statusText}`);
         }
 
-        const data = await response.json(); // Başarılı güncelleme yanıtını al
+        const data = await response.json();
         console.log("[appendContentToDriveFile] Dosya başarıyla güncellendi:", data);
-
-        // İsteğe bağlı: Metadata'yı ayrı bir PATCH ile güncelle (description)
-        /*
-        const updateMetaUrl = `https://www.googleapis.com/drive/v3/files/${fileId}`;
-        const metaUpdateBody = { description: `Web Defterim Notları. Son ekleme: ${now.toISOString()}` };
-        await fetch(updateMetaUrl, {
-             method: 'PATCH',
-             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-             body: JSON.stringify(metaUpdateBody)
-        });
-        console.log("[appendContentToDriveFile] Dosya metadata (description) güncellendi.");
-        */
-
-        return updatedContent; // Güncellenmiş içeriği döndür
+        // Başarı durumunda bir şey döndürmeye gerek yok
 
     } catch (error) {
          console.error("[appendContentToDriveFile] Dosya güncelleme sırasında kritik hata:", error);
-         throw error;
+         throw error; // Hatanın yukarı gitmesi için
     }
 }
 
@@ -649,20 +718,19 @@ async function getDriveFileContent(token, fileId) {
         });
         console.log(`[getDriveFileContent] Yanıt durumu: ${response.status}`);
         if (!response.ok) {
-            const errorText = await response.text();
+            const errorText = await response.text(); // Hata mesajını almayı dene
             console.error(`[getDriveFileContent] API hatası (${response.status}): ${response.statusText} - ${errorText}`);
-            if (response.status === 404) { throw new Error(`Dosya içeriği alınamadı, bulunamadı (404) - ID: ${fileId}`); }
-            if (response.status === 401) { chrome.identity.removeCachedAuthToken({ token: token }, () => {}); throw new Error("Kimlik doğrulama sorunu (İçerik Alma)."); }
-            // 403 Forbidden (örn. scope yetersiz veya dosya sahibi değilseniz)
-            if (response.status === 403) { throw new Error(`Dosya içeriği okuma izni yok (403) - ID: ${fileId}`);}
+            if (response.status === 404) { throw new Error(`Dosya içeriği alınamadı, dosya bulunamadı (404) - ID: ${fileId}`); }
+            if (response.status === 401 || response.status === 403) {
+                chrome.identity.removeCachedAuthToken({ token: token }, () => {});
+                throw new Error(`Dosya okuma izni hatası (${response.status}) - ID: ${fileId}`);
+            }
             throw new Error(`API Hatası (${response.status}) - İçerik Alınamadı: ${response.statusText}`);
         }
-        // İçeriği text olarak alalım
         const content = await response.text();
         console.log(`[getDriveFileContent] Dosya (${fileId}) içeriği başarıyla alındı (uzunluk: ${content.length}).`);
         return content;
     } catch (error) {
-        // Fetch sırasındaki ağ hataları veya yukarıdaki throw'lar buraya düşer
         console.error(`[getDriveFileContent] Dosya (${fileId}) içeriği alınırken kritik hata:`, error);
         // Hatanın türüne göre farklı işlemler yapılabilir ama şimdilik yukarı fırlatalım
         throw error;
@@ -672,94 +740,54 @@ async function getDriveFileContent(token, fileId) {
 
 // --- HTML Not Girdisini Formatlama ---
 function formatHtmlEntry(htmlContent, url, title, date) {
-    // title ve url'i HTML'e karşı güvenli hale getir (içlerine zararlı kod enjekte edilmesini önle)
-    const escapeHTML = (str) => str 
-        ? str.replace(/&/g, '&amp;')
-             .replace(/</g, '&lt;')
-             .replace(/>/g, '&gt;')
-             .replace(/"/g, '&quot;')
-             .replace(/'/g, '&#39;') 
-        : '';
-        
+    // Güvenlik için escape etme
     const safeTitle = escapeHTML(title);
-    const safeUrl = escapeHTML(url); // URL'i de escape etmek en güvenlisi
-    
-        return `
-    <div class="entry">
-      <div class="entry-meta">
-        <p><strong>Başlık:</strong> ${safeTitle || 'Başlık Yok'}</p>
-        <p><strong>Kaynak:</strong> <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a></p>
-        <p><strong>Tarih:</strong> ${date.toLocaleString('tr-TR', { dateStyle: 'full', timeStyle: 'long' })}</p>
-      </div>
-      <div class="entry-content">
-        ${htmlContent || '<i>İçerik alınamadı.</i>'}
-      </div>
-    </div>`;
+    const safeUrl = escapeHTML(url);
 
+    return `
+<div class="entry">
+  <div class="entry-meta">
+    <p><strong>Başlık:</strong> ${safeTitle || 'Başlık Yok'}</p>
+    <p><strong>Kaynak:</strong> <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl || 'URL Yok'}</a></p>
+    <p><strong>Tarih:</strong> ${date.toLocaleString('tr-TR', { dateStyle: 'full', timeStyle: 'long' })}</p>
+  </div>
+  <div class="entry-content">
+    ${htmlContent || '<i>İçerik alınamadı veya boştu.</i>'}
+  </div>
+</div>`;
 }
 
-
-// --- Yerel İndirmeyi Tetikleme ---
-function triggerLocalDownload(content, filename) {
-    console.log(`[triggerLocalDownload] "${filename}" için indirme başlatılıyor...`);
-    try {
-        const blob = new Blob([content], { type: 'text/html;charset=UTF-8' });
-        const objectUrl = URL.createObjectURL(blob);
-        console.log(`[triggerLocalDownload] Blob URL oluşturuldu: ${objectUrl}`);
-
-        chrome.downloads.download({
-            url: objectUrl,
-            filename: filename,
-            saveAs: true // Kullanıcıya sor
-        }, (downloadId) => {
-            // downloadId tanımsızsa veya hata varsa
-            if (downloadId === undefined || chrome.runtime.lastError) {
-                 const errorMsg = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Download ID alınamadı.";
-                 console.error("[triggerLocalDownload] İndirme başlatılamadı:", errorMsg);
-                 bildirimGoster("Hata", `Dosya indirilemedi: ${errorMsg}`);
-                 URL.revokeObjectURL(objectUrl); // Hata durumunda URL'i hemen serbest bırak
-                 return;
-            }
-
-            // Başarılıysa
-            console.log(`[triggerLocalDownload] İndirme başlatıldı, ID: ${downloadId}`);
-            const listener = (delta) => {
-                  // Sadece ilgili indirme ID'si ve tamamlanma/iptal durumuyla ilgilen
-                  if (delta.id === downloadId && delta.state && delta.state.current !== 'in_progress') {
-                      console.log(`[triggerLocalDownload] İndirme (${downloadId}) durumu değişti: ${delta.state.current}. Object URL serbest bırakılıyor.`);
-                      URL.revokeObjectURL(objectUrl);
-                      chrome.downloads.onChanged.removeListener(listener); // Dinleyiciyi kaldır
-                  }
-             };
-             chrome.downloads.onChanged.addListener(listener);
-
-             // Önlem: Belirli bir süre sonra URL'i ve dinleyiciyi her ihtimale karşı kaldır
-             setTimeout(() => {
-                 console.log(`[triggerLocalDownload] Zaman aşımı (${downloadId}). Object URL ve listener kaldırılıyor (eğer hala varsa).`);
-                 URL.revokeObjectURL(objectUrl); // Zaten kaldırılmışsa sorun olmaz
-                 chrome.downloads.onChanged.removeListener(listener);
-             }, 120000); // 2 dakika
-        });
-    } catch (error) {
-        console.error("[triggerLocalDownload] Yerel indirme sırasında kritik hata:", error);
-        bildirimGoster("Hata", "Dosya indirilirken bir sorun oluştu.");
-        // Eğer objectUrl oluşturulduysa, onu temizlemeye çalışalım
-        if (typeof objectUrl !== 'undefined') {
-            try { URL.revokeObjectURL(objectUrl); } catch (revokeError) {}
-        }
-    }
-}
-
-// --- Bildirim Gösterme ---
+// --- Bildirim Gösterme (Güncellendi) ---
 function bildirimGoster(baslik, mesaj) {
   const notificationId = `web-defterim-notif-${Date.now()}`;
-  chrome.notifications.create(notificationId, {
-    type: 'basic',
-    // iconUrl: '../icons/icon128.png', // icons klasörünüz varsa yolu düzeltin
-    iconUrl: 'icons/icon128.png', // Genellikle manifest ile aynı seviyede olur
-    title: `Web Defterim - ${baslik}`,
-    message: mesaj.substring(0, 250)
-  });
+  // Proje kök dizininde 'icons' klasörü olduğunu varsayalım
+  const iconPath = 'icons/icon128.png';
+
+  console.log(`[bildirimGoster] Bildirim gösterilecek: Başlık="${baslik}", Mesaj="${mesaj}", Icon="${iconPath}"`);
+
+  // Önce mevcut aynı ID'li bildirimi temizle (isteğe bağlı, hızlı tıklamalarda üst üste binmeyi önler)
+  // chrome.notifications.clear(notificationId, (wasCleared) => {
+      chrome.notifications.create(notificationId, {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png', // manifest.json'daki yola göre ayarla
+        title: `Web Defterim - ${baslik}`,
+        message: mesaj.substring(0, 250)
+      }, (createdNotificationId) => {
+          // Bildirim oluşturma sonrası hata kontrolü
+          if (chrome.runtime.lastError) {
+              console.error(`[bildirimGoster] Bildirim oluşturma hatası (ID: ${notificationId}):`, chrome.runtime.lastError);
+              // Alternatif olarak console'a log basmak
+              console.warn(`BİLDİRİM GÖSTERİLEMEDİ - Başlık: ${baslik}, Mesaj: ${mesaj}`);
+          } else {
+              console.log(`[bildirimGoster] Bildirim başarıyla oluşturuldu/gösterildi (ID: ${createdNotificationId})`);
+              // Bildirimi birkaç saniye sonra otomatik kapat (isteğe bağlı)
+              // setTimeout(() => {
+              //     chrome.notifications.clear(createdNotificationId);
+              // }, 5000); // 5 saniye
+          }
+      });
+  // }); // clear kullanılıyorsa kapatma parantezi
 }
 
-console.log("[Web Defterim] Service Worker (v1.2 Log) başlatıldı.");
+// Service Worker başlangıç logu
+console.log("[Web Defterim] Service Worker (v3.1) başlatıldı.");
