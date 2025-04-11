@@ -170,6 +170,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 // --- Defteri Göster İşlemini Yapan Fonksiyon (YENİ/Geri Eklendi) ---
+// --- Defteri Göster İşlemini Yapan Fonksiyon (Data URL ile Güncellendi) ---
 async function handleShowNotebook() {
     console.log("[handleShowNotebook] Başlatıldı.");
     let fileId = null;
@@ -181,7 +182,14 @@ async function handleShowNotebook() {
         fileId = data[TARGET_FILE_ID_KEY];
         if (!fileId) {
             console.log("[handleShowNotebook] Kayıtlı dosya ID'si yok.");
-            bildirimGoster("Bilgi", `"${ANA_HTML_DOSYA_ADI}" dosyası henüz oluşturulmamış veya bulunamıyor.`);
+            // Belki dosyayı Drive'da aramayı deneyebiliriz? Şimdilik hata verelim.
+            const folderData = await storageLocalGet([FOLDER_ID_KEY]);
+            if (!folderData[FOLDER_ID_KEY]) {
+                 bildirimGoster("Bilgi", `"${ANA_HTML_DOSYA_ADI}" dosyası henüz oluşturulmamış veya klasör bilgisi yok.`);
+            } else {
+                 // Kullanıcıya dosyayı Drive'da manuel olarak bulmasını söyleyebiliriz.
+                 bildirimGoster("Bilgi", `"${ANA_HTML_DOSYA_ADI}" dosyası bilgisi bulunamadı. Drive'da "${HEDEF_KLASOR_ADI}" klasörünü kontrol edin.`);
+            }
             return;
         }
         console.log(`[handleShowNotebook] Dosya ID'si bulundu: ${fileId}`);
@@ -192,26 +200,27 @@ async function handleShowNotebook() {
     // 2. Yetki Al
     try {
         console.log("[handleShowNotebook] OAuth jetonu isteniyor...");
-        token = await getAuthToken(true); // Kullanıcı etkileşimi gerekebilir
+        token = await getAuthToken(true);
         console.log("[handleShowNotebook] OAuth jetonu alındı.");
     } catch (authError) {
          throw new Error(`Google hesabınıza erişim izni alınamadı: ${authError.message}`);
     }
 
-    // 3. Drive API ile Dosya Bilgisini (webViewLink) Al
-    const apiUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,webViewLink,trashed`;
-    console.log(`[handleShowNotebook] Drive API sorgusu: ${apiUrl}`);
+    // --- DEĞİŞİKLİK BAŞLIYOR ---
+    // 3. Drive API ile Dosya İçeriğini İndir (webViewLink yerine)
+    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+    console.log(`[handleShowNotebook] Dosya içeriği indiriliyor: ${downloadUrl}`);
     try {
-        const response = await fetch(apiUrl, {
+        const response = await fetch(downloadUrl, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${token}` }
         });
-        console.log(`[handleShowNotebook] Drive API yanıt durumu: ${response.status}`);
+        console.log(`[handleShowNotebook] İçerik indirme yanıt durumu: ${response.status}`);
 
         if (!response.ok) {
-            // Hata durumları
-            const errorText = await response.text(); // Hata detayını almayı dene
-            console.error(`[handleShowNotebook] Drive API hatası (${response.status}): ${errorText}`);
+            // Hata durumları (404, 401, 403 vb.)
+            const errorText = await response.text();
+            console.error(`[handleShowNotebook] İçerik indirme hatası (${response.status}): ${errorText}`);
             if (response.status === 404) {
                 console.warn(`[handleShowNotebook] Dosya (${fileId}) Drive'da bulunamadı (404). Depolama temizleniyor.`);
                 await storageLocalSet({ [TARGET_FILE_ID_KEY]: null }).catch(e => console.error("ID temizlenirken hata:", e));
@@ -219,41 +228,34 @@ async function handleShowNotebook() {
             } else if (response.status === 401 || response.status === 403) {
                  console.warn(`[handleShowNotebook] Yetki/İzin hatası (${response.status}). Token geçersiz olabilir.`);
                  chrome.identity.removeCachedAuthToken({ token: token }, () => {});
-                 throw new Error(`Dosyaya erişim izni yok (${response.status}). Tekrar deneyin.`);
+                 throw new Error(`Dosya içeriğine erişim izni yok (${response.status}). Tekrar deneyin.`);
             } else {
-                throw new Error(`Google Drive API hatası (${response.status}): ${response.statusText}`);
+                throw new Error(`Google Drive API içerik indirme hatası (${response.status}): ${response.statusText}`);
             }
         }
 
-        // Yanıt başarılı
-        const data = await response.json();
-        console.log("[handleShowNotebook] Dosya bilgisi alındı:", data);
+        // Yanıt başarılıysa, içeriği text olarak al
+        const htmlContent = await response.text();
+        console.log(`[handleShowNotebook] Dosya içeriği başarıyla alındı (uzunluk: ${htmlContent.length}).`);
 
-        if (data.trashed) {
-            console.warn(`[handleShowNotebook] Dosya (${fileId}) çöp kutusunda. Depolama temizleniyor.`);
-            await storageLocalSet({ [TARGET_FILE_ID_KEY]: null }).catch(e => console.error("ID temizlenirken hata:", e));
-            throw new Error(`"${ANA_HTML_DOSYA_ADI}" dosyası çöp kutusunda.`);
-        }
+        // 4. Data URL Oluştur
+        // İçeriği URI bileşenlerine uygun şekilde kodlayalım.
+        // Not: Çok büyük dosyalar (birkaç MB+) URL uzunluk sınırlarına takılabilir.
+        const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`;
+        console.log("[handleShowNotebook] Data URL oluşturuldu (ilk 100 char):", dataUrl.substring(0, 100));
 
-        const webViewLink = data.webViewLink;
-        if (!webViewLink) {
-            throw new Error("Dosyanın görüntülenebilir bağlantısı (webViewLink) alınamadı.");
-        }
-
-        // 4. Yeni Sekmede Aç
-        console.log(`[handleShowNotebook] Yeni sekmede açılıyor: ${webViewLink}`);
-        await chrome.tabs.create({ url: webViewLink, active: true });
-        console.log("[handleShowNotebook] Yeni sekme başarıyla açıldı.");
-        // Başarı bildirimi genellikle gereksiz, sekme açılması yeterli.
+        // 5. Yeni Sekmede Data URL'i Aç
+        console.log(`[handleShowNotebook] Yeni sekmede Data URL açılıyor...`);
+        await chrome.tabs.create({ url: dataUrl, active: true });
+        console.log("[handleShowNotebook] Data URL yeni sekmede başarıyla açıldı.");
 
     } catch (fetchOrTabError) {
          // Fetch hatası veya sekme açma hatası
-         console.error("[handleShowNotebook] İşlem sırasında hata:", fetchOrTabError);
-         // Hatanın zaten anlamlı bir mesajı olmalı
-         throw fetchOrTabError;
+         console.error("[handleShowNotebook] İçerik indirme/gösterme sırasında hata:", fetchOrTabError);
+         throw fetchOrTabError; // Hatanın yukarı gitmesi için
     }
+    // --- DEĞİŞİKLİK BİTİYOR ---
 }
-
 // --- Seçili Alanın HTML'ini Alma Fonksiyonu ---
 async function getSelectedHtml(tabId) {
     // ... (Önceki kod - detaylı loglama ile veya olmadan) ...
