@@ -8,6 +8,13 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "action": {
+     "default_icon": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png"
+     },
+    "default_title": "Web Defterim"
+    },
   "background": {
     "service_worker": "js/background.js",
     "type": "module"
@@ -18,7 +25,8 @@
     "storage",
     "notifications",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "tabs"
    
   ],
   

@@ -15,3 +15,5 @@ node_modules/
 
 # Log dosyaları (Oluşursa)
 *.log
+*.txt
+client_secret_503921450020-hpn56mddsu8jq2fo4ks43rpfjuug4tjc.apps.googleusercontent.com.json
