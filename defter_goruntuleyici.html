@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Defterim Notları</title>
+    <style>
+        /* Temel stiller (background.js'deki stillere benzer olabilir veya farklı) */
+        body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 0; background-color: #f8f9fa; }
+        #yukleniyor { text-align: center; padding: 50px; font-size: 1.2em; color: #6c757d; }
+        #icerikAlani {
+            /* Ana HTML'in kendi container/body stilleri olacağından,
+               burada çok fazla stil tanımlamaya gerek olmayabilir.
+               Sadece içeriğin yerleşeceği alanı belirtelim. */
+            margin: 0 auto; /* İçeriği ortalayabilir */
+            max-width: 100%; /* İçeriğin taşmasını engelle */
+            padding: 10px; /* Kenar boşluğu */
+        }
+        /* İsterseniz buraya daha fazla stil ekleyebilirsiniz (örn: arama kutusu stili) */
+    </style>
+</head>
+<body>
+    <div id="yukleniyor">
+        Defter içeriği yükleniyor...
+    </div>
+    <div id="icerikAlani" style="display: none;">
+        <!-- Drive'dan gelen HTML içeriği buraya eklenecek -->
+    </div>
+
+    <script src="defter_goruntuleyici.js"></script>
+</body>
+</html>
