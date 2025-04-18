@@ -12,7 +12,7 @@ node_modules/
 # Paket dosyaları (Eklentiyi paketlersen)
 *.crx
 *.zip
-
+onemli.md
 # Log dosyaları (Oluşursa)
 *.log
 *.txt
